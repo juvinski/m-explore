@@ -77,10 +77,20 @@ Explore::Explore()
     marker_array_publisher_ =
         private_nh_.advertise<visualization_msgs::MarkerArray>("frontiers", 10);
   }
+  
+  ROS_INFO("Publishing RAVI STATE");
+  ravi_state_publisher = relative_nh_.advertise<std_msgs::String>("ravi/current_state", 1000);
+  ROS_INFO("Publishing RAVI PEOPLE");
+  ravi_people_publisher = relative_nh_.advertise<visualization_msgs::MarkerArray>("ravi/people", 1000);
+
+  ROS_INFO("Connecting to RAVI STATE");
+  ravi_state_subscriber = relative_nh_.subscribe("ravi/current_state", 100, &Explore::updateStatus, this);
 
   ROS_INFO("Waiting to connect to move_base server");
   move_base_client_.waitForServer();
   ROS_INFO("Connected to move_base server");
+
+  _people_count = 0;
 
   exploring_timer_ =
       relative_nh_.createTimer(ros::Duration(1. / planner_frequency_),
@@ -92,8 +102,71 @@ Explore::~Explore()
   stop();
 }
 
-void Explore::visualizeFrontiers(
-    const std::vector<frontier_exploration::Frontier>& frontiers)
+void Explore::updateStatus(const std_msgs::String::ConstPtr& msg)
+{
+  ROS_INFO("I heard: [%s]", msg->data.c_str());
+  std::cout << std::endl <<  "=== STATUS: : " << msg->data << "====== " << std::endl;
+  
+  if(msg->data.compare("TARGETING") == 0)
+  {
+    //if(_in_exploring == true)
+   // {
+   //   stop();
+   //   _ravi_state.data = msg->data;
+   // }
+   // else
+   // {
+   //   return;
+   // }
+    _people_count++;
+    
+    visualization_msgs::Marker marker;
+    std::vector<visualization_msgs::Marker>& people_markers = people_array_msg.markers;
+
+    marker.header.frame_id = "/map";
+    marker.header.stamp = ros::Time::now();
+
+    marker.id = _people_count;
+    marker.type = visualization_msgs::Marker::CUBE;
+    marker.action = visualization_msgs::Marker::ADD;
+    marker.pose = costmap_client_.getRobotPose();
+    // Set the scale of the marker -- 1x1x1 here means 1m on a side
+    marker.scale.x = 1.0;
+    marker.scale.y = 1.0;
+    marker.scale.z = 1.0;
+    marker.color.r = 0.0f;
+    marker.color.g = 1.0f;
+    marker.color.b = 0.0f;
+    marker.color.a = 1.0;
+    marker.lifetime = ros::Duration();
+    people_markers.push_back(marker);
+
+    ravi_people_publisher.publish(people_array_msg);
+  }
+  else if(msg->data.compare("ACQUIRED") == 0)
+  {
+    //if(_in_exploring == false)
+    //{
+     // start();
+     // _ravi_state.data = msg->data;
+   // }
+    //else
+    //{
+    //  return;
+   // }
+    // send goal to move_base if we have something new to pursue
+    move_base_msgs::MoveBaseGoal goal;
+    goal.target_pose.pose.position.x = 0;
+    goal.target_pose.pose.position.y = 0;
+    goal.target_pose.pose.orientation.w = 1.;
+    goal.target_pose.header.frame_id = costmap_client_.getGlobalFrameID();
+    goal.target_pose.header.stamp = ros::Time::now();
+    move_base_client_.sendGoal(goal);
+  }
+  //else if(_ravi_state.data.compare() == 0)
+}
+
+void Explore::visualizeFrontiers(const std::vector<frontier_exploration::Frontier>& frontiers)
 {
   std_msgs::ColorRGBA blue;
   blue.r = 0;
@@ -191,7 +264,7 @@ void Explore::makePlan()
     stop();
     return;
   }
-
+  publishRAVI("PATROL");
   // publish frontiers as visualization markers
   if (visualize_) {
     visualizeFrontiers(frontiers);
@@ -204,6 +277,7 @@ void Explore::makePlan()
                          return goalOnBlacklist(f.centroid);
                        });
   if (frontier == frontiers.end()) {
+    publishRAVI("FINISH");
     stop();
     return;
   }
@@ -248,7 +322,7 @@ bool Explore::goalOnBlacklist(const geometry_msgs::Point& goal)
 {
   constexpr static size_t tolerace = 5;
   costmap_2d::Costmap2D* costmap2d = costmap_client_.getCostmap();
-
+ 
   // check if a goal is on the blacklist for goals that we're pursuing
   for (auto& frontier_goal : frontier_blacklist_) {
     double x_diff = fabs(goal.x - frontier_goal.x);
@@ -282,15 +356,28 @@ void Explore::reachedGoal(const actionlib::SimpleClientGoalState& status,
 
 void Explore::start()
 {
+  std::cout << std::endl <<  "=========== START ==================== " << std::endl;
   exploring_timer_.start();
+  _in_exploring = true;
+  publishRAVI("STARTING");
 }
 
 void Explore::stop()
 {
+  std::cout << std::endl <<  "=========== STOP ==================== " << std::endl;
   move_base_client_.cancelAllGoals();
   exploring_timer_.stop();
+  _in_exploring = false;
   ROS_INFO("Exploration stopped.");
 }
+
+void Explore::publishRAVI(std::string _msg)
+{
+  std_msgs::String _msg_;
+  _msg_.data = _msg;
+  ravi_state_publisher.publish(_msg_);
+}
+
 
 }  // namespace explore
 
